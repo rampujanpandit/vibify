@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Vibify Music</string>
+    <string name="home">Home</string>
+    <string name="search">Search</string>
+    <string name="library">Your Library</string>
+    <string name="good_morning">Good morning</string>
+    <string name="good_afternoon">Good afternoon</string>
+    <string name="good_evening">Good evening</string>
+    <string name="recently_played">Recently played</string>
+    <string name="made_for_you">Made for you</string>
+    <string name="trending_now">Trending now</string>
+    <string name="liked_songs">Liked Songs</string>
+</resources>
