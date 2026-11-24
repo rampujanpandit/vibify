@@ -9,6 +9,7 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.vibify.music.data.local.PlaybackSettingsStore
 import com.vibify.music.data.local.PodcastProgressStore
 import com.vibify.music.data.model.AutoPlaylist
 import com.vibify.music.data.model.Category
@@ -59,6 +60,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val podcastEngine = PodcastEngine()
     private val storyEngine = StoryEngine()
     private val podcastProgress = PodcastProgressStore(appContext)
+    private val playbackSettings = PlaybackSettingsStore(appContext)
     private var podcastSearchJob: Job? = null
     private var podcastFeedJob: Job? = null
     private var storySearchJob: Job? = null
@@ -189,6 +191,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _storyChaptersLoading = MutableStateFlow(false)
     val storyChaptersLoading: StateFlow<Boolean> = _storyChaptersLoading.asStateFlow()
 
+    private val _spokenSpeed = MutableStateFlow(playbackSettings.spokenSpeed)
+    val spokenSpeed: StateFlow<Float> = _spokenSpeed.asStateFlow()
+
+    private val _skipSeconds = MutableStateFlow(playbackSettings.skipSeconds)
+    val skipSeconds: StateFlow<Int> = _skipSeconds.asStateFlow()
+
+    private val _resumeOnOpen = MutableStateFlow(playbackSettings.resumeOnOpen)
+    val resumeOnOpen: StateFlow<Boolean> = _resumeOnOpen.asStateFlow()
+
+    private val _sleepLabel = MutableStateFlow("Off")
+    val sleepLabel: StateFlow<String> = _sleepLabel.asStateFlow()
+
+    private val _sleepMode = MutableStateFlow("off")
+    val sleepMode: StateFlow<String> = _sleepMode.asStateFlow()
+
+    private var sleepJob: Job? = null
+    private var sleepChoice = SleepChoice.OFF
+    private var lastSessionSave = 0L
+
     private var searchDebounceJob: Job? = null
 
     val allTracks: StateFlow<List<Track>> = repository.allTracks
@@ -212,6 +233,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             pushNotification("Playback issue", msg)
         }
 
+        audioPlayer.onSleepFinished = {
+            sleepChoice = SleepChoice.OFF
+            _sleepMode.value = "off"
+            _sleepLabel.value = "Off"
+        }
+        audioPlayer.preferredSpokenSpeed = playbackSettings.spokenSpeed
+
         audioPlayer.onListeningEvent = { track, action, positionMs ->
             if (action == "COMPLETE" && track.isSpokenWord) {
                 podcastProgress.clear(track.id)
@@ -227,21 +255,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             playerState.collect { state ->
-                val id = state.currentTrack?.id ?: return@collect
                 val track = state.currentTrack ?: return@collect
+                val now = System.currentTimeMillis()
+                if (state.queue.isNotEmpty() && now - lastSessionSave > 5_000) {
+                    lastSessionSave = now
+                    playbackSettings.saveSession(
+                        state.queue,
+                        state.currentQueueIndex.coerceAtLeast(0),
+                        state.currentPositionMs
+                    )
+                }
                 if (!track.isSpokenWord) return@collect
                 if (state.durationMs > 0 && state.currentPositionMs >= state.durationMs - 3_000) {
-                    podcastProgress.clear(id)
+                    podcastProgress.clear(track.id)
                     return@collect
                 }
-                val now = System.currentTimeMillis()
                 if (state.currentPositionMs > 3_000 && now - lastProgressSave > 5_000) {
                     lastProgressSave = now
-                    podcastProgress.save(id, state.currentPositionMs)
+                    podcastProgress.save(track.id, state.currentPositionMs)
                 }
             }
         }
 
+        if (audioPlayer.playerState.value.currentTrack == null) {
+            restoreLastSession()
+        }
         refreshHome()
     }
 
@@ -650,18 +688,133 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         audioPlayer.seekToPosition(positionMs)
     }
 
-    fun seekBy(deltaMs: Long) {
-        audioPlayer.seekBy(deltaMs)
+    fun cyclePlaybackSpeed() {
+        val next = nextSpokenSpeed(playerState.value.playbackSpeed)
+        audioPlayer.setPlaybackSpeed(next)
+        if (playerState.value.currentTrack?.isSpokenWord == true) {
+            rememberSpokenSpeed(next)
+        }
     }
 
-    fun cyclePlaybackSpeed() {
-        val next = when (playerState.value.playbackSpeed) {
-            1f -> 1.25f
-            1.25f -> 1.5f
-            1.5f -> 2f
-            else -> 1f
+    fun cycleSpokenSpeed() {
+        val next = nextSpokenSpeed(_spokenSpeed.value)
+        rememberSpokenSpeed(next)
+        if (playerState.value.currentTrack?.isSpokenWord == true) {
+            audioPlayer.setPlaybackSpeed(next)
         }
-        audioPlayer.setPlaybackSpeed(next)
+    }
+
+    fun selectSpokenSpeed(speed: Float) {
+        if (speed !in PlaybackSettingsStore.SPEEDS) return
+        rememberSpokenSpeed(speed)
+        if (playerState.value.currentTrack?.isSpokenWord == true) {
+            audioPlayer.setPlaybackSpeed(speed)
+        }
+    }
+
+    fun selectSkipSeconds(seconds: Int) {
+        if (seconds !in PlaybackSettingsStore.SKIPS) return
+        _skipSeconds.value = seconds
+        playbackSettings.skipSeconds = seconds
+    }
+
+    fun selectSleep(mode: String) {
+        val choice = when (mode) {
+            "15" -> SleepChoice.MIN_15
+            "30" -> SleepChoice.MIN_30
+            "45" -> SleepChoice.MIN_45
+            "end" -> SleepChoice.END
+            else -> SleepChoice.OFF
+        }
+        applySleep(choice)
+    }
+
+    fun skipForward() {
+        audioPlayer.seekBy(_skipSeconds.value * 1_000L)
+    }
+
+    fun skipBackward() {
+        audioPlayer.seekBy(-_skipSeconds.value * 1_000L)
+    }
+
+    fun setResumeOnOpen(enabled: Boolean) {
+        _resumeOnOpen.value = enabled
+        playbackSettings.resumeOnOpen = enabled
+    }
+
+    fun cycleSleepTimer() {
+        val next = when (sleepChoice) {
+            SleepChoice.OFF -> SleepChoice.MIN_15
+            SleepChoice.MIN_15 -> SleepChoice.MIN_30
+            SleepChoice.MIN_30 -> SleepChoice.MIN_45
+            SleepChoice.MIN_45 -> SleepChoice.END
+            SleepChoice.END -> SleepChoice.OFF
+        }
+        applySleep(next)
+    }
+
+    private fun rememberSpokenSpeed(speed: Float) {
+        _spokenSpeed.value = speed
+        playbackSettings.spokenSpeed = speed
+        audioPlayer.preferredSpokenSpeed = speed
+    }
+
+    private fun nextSpokenSpeed(current: Float): Float {
+        val speeds = PlaybackSettingsStore.SPEEDS
+        val index = speeds.indexOfFirst { kotlin.math.abs(it - current) < 0.01f }
+        return speeds[(index + 1).mod(speeds.size)]
+    }
+
+    private fun applySleep(choice: SleepChoice) {
+        sleepJob?.cancel()
+        sleepChoice = choice
+        _sleepMode.value = when (choice) {
+            SleepChoice.OFF -> "off"
+            SleepChoice.MIN_15 -> "15"
+            SleepChoice.MIN_30 -> "30"
+            SleepChoice.MIN_45 -> "45"
+            SleepChoice.END -> "end"
+        }
+        audioPlayer.stopAfterCurrent = choice == SleepChoice.END
+        when (choice) {
+            SleepChoice.OFF -> _sleepLabel.value = "Off"
+            SleepChoice.END -> _sleepLabel.value = "Stops at the end of this track"
+            SleepChoice.MIN_15, SleepChoice.MIN_30, SleepChoice.MIN_45 -> {
+                val minutes = when (choice) {
+                    SleepChoice.MIN_15 -> 15
+                    SleepChoice.MIN_30 -> 30
+                    else -> 45
+                }
+                val endsAt = System.currentTimeMillis() + minutes * 60_000L
+                sleepJob = viewModelScope.launch {
+                    while (true) {
+                        val left = endsAt - System.currentTimeMillis()
+                        if (left <= 0L) {
+                            audioPlayer.pausePlayback()
+                            applySleep(SleepChoice.OFF)
+                            pushNotification("Sleep timer", "Playback paused")
+                            return@launch
+                        }
+                        val mins = ((left + 59_999L) / 60_000L).toInt()
+                        _sleepLabel.value = "$mins min left"
+                        delay(1_000)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun restoreLastSession() {
+        if (!playbackSettings.resumeOnOpen) return
+        val session = playbackSettings.loadSession() ?: return
+        val track = session.tracks[session.index]
+        val endGuard = if (track.durationMs > 20_000) track.durationMs - 10_000 else Long.MAX_VALUE
+        val position = if (session.positionMs in 8_000 until endGuard) session.positionMs else 0L
+        audioPlayer.playTrackList(session.tracks, session.index, position)
+    }
+
+    fun seekBy(deltaMs: Long) {
+        audioPlayer.seekBy(deltaMs)
     }
 
     fun toggleShuffle() {
@@ -707,4 +860,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             (listOf(AppNotification(title = title, message = message)) + current).take(30)
         }
     }
+}
+
+private enum class SleepChoice {
+    OFF, MIN_15, MIN_30, MIN_45, END
 }

@@ -171,6 +171,11 @@ fun MainAppContent(
     val selectedStory by viewModel.selectedStory.collectAsState()
     val storyChapters by viewModel.storyChapters.collectAsState()
     val storyChaptersLoading by viewModel.storyChaptersLoading.collectAsState()
+    val sleepLabel by viewModel.sleepLabel.collectAsState()
+    val sleepMode by viewModel.sleepMode.collectAsState()
+    val spokenSpeed by viewModel.spokenSpeed.collectAsState()
+    val skipSeconds by viewModel.skipSeconds.collectAsState()
+    val resumeOnOpen by viewModel.resumeOnOpen.collectAsState()
     val isNowPlayingExpanded by viewModel.isNowPlayingExpanded.collectAsState()
     val trackDetails by viewModel.trackDetails.collectAsState()
     val error by viewModel.error.collectAsState()
@@ -474,7 +479,16 @@ fun MainAppContent(
                                 navController.popBackStack()
                             },
                             onScanLocal = onRequestPermissions,
-                            onClearLikes = { viewModel.clearLikedSongs() }
+                            onClearLikes = { viewModel.clearLikedSongs() },
+                            sleepLabel = sleepLabel,
+                            sleepMode = sleepMode,
+                            spokenSpeed = spokenSpeed,
+                            skipSeconds = skipSeconds,
+                            resumeOnOpen = resumeOnOpen,
+                            onSelectSleep = { viewModel.selectSleep(it) },
+                            onSelectSpeed = { viewModel.selectSpokenSpeed(it) },
+                            onSelectSkip = { viewModel.selectSkipSeconds(it) },
+                            onResumeChange = { viewModel.setResumeOnOpen(it) }
                         )
                     }
 
@@ -525,9 +539,10 @@ fun MainAppContent(
                 onSeekTo = { viewModel.seekTo(it) },
                 onShuffleClick = { viewModel.toggleShuffle() },
                 onRepeatClick = { viewModel.toggleRepeat() },
-                onRewindClick = { viewModel.seekBy(-15_000) },
-                onForwardClick = { viewModel.seekBy(15_000) },
+                onRewindClick = { viewModel.skipBackward() },
+                onForwardClick = { viewModel.skipForward() },
                 onSpeedClick = { viewModel.cyclePlaybackSpeed() },
+                skipSeconds = skipSeconds,
                 onLikeClick = { viewModel.toggleLike(currentTrack) },
                 onQueueClick = {
                     viewModel.setNowPlayingExpanded(false)

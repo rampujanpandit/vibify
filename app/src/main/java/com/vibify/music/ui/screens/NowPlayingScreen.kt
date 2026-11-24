@@ -112,6 +112,7 @@ fun NowPlayingScreen(
     onRewindClick: () -> Unit = {},
     onForwardClick: () -> Unit = {},
     onSpeedClick: () -> Unit = {},
+    skipSeconds: Int = 15,
     onLikeClick: () -> Unit,
     onQueueClick: () -> Unit,
     onShareClick: () -> Unit,
@@ -492,7 +493,7 @@ fun NowPlayingScreen(
             ) {
                 IconButton(onClick = if (isPodcast) onRewindClick else onShuffleClick) {
                     if (isPodcast) {
-                        Text("-15", color = SpotifyWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text("-$skipSeconds", color = SpotifyWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     } else {
                         Icon(
                             imageVector = Icons.Default.Shuffle,
@@ -551,7 +552,7 @@ fun NowPlayingScreen(
 
                 IconButton(onClick = if (isPodcast) onForwardClick else onRepeatClick) {
                     if (isPodcast) {
-                        Text("+15", color = SpotifyWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text("+$skipSeconds", color = SpotifyWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     } else {
                         when (playerState.repeatMode) {
                             RepeatMode.OFF -> Icon(

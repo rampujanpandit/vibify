@@ -48,6 +48,9 @@ class VibifyAudioPlayer private constructor(private val context: Context) {
 
     var onErrorCallback: OnError? = null
     var onListeningEvent: OnListeningEvent? = null
+    var preferredSpokenSpeed: Float = 1f
+    var stopAfterCurrent: Boolean = false
+    var onSleepFinished: (() -> Unit)? = null
 
     private var lastEmittedPlayTrackId: String? = null
     private var errorRetryMediaId: String? = null
@@ -127,6 +130,12 @@ class VibifyAudioPlayer private constructor(private val context: Context) {
                 if (playbackState == Player.STATE_ENDED) {
                     _playerState.value.currentTrack?.let { track ->
                         onListeningEvent?.invoke(track, "COMPLETE", exoPlayer.currentPosition)
+                    }
+                    if (stopAfterCurrent) {
+                        stopAfterCurrent = false
+                        exoPlayer.pause()
+                        onSleepFinished?.invoke()
+                        return
                     }
                     when (_playerState.value.repeatMode) {
                         RepeatMode.ONE -> {
@@ -228,7 +237,7 @@ class VibifyAudioPlayer private constructor(private val context: Context) {
         return if (fixed == raw) uri else Uri.parse(fixed)
     }
 
-    fun playTrackList(tracks: List<Track>, startIndex: Int = 0) {
+    fun playTrackList(tracks: List<Track>, startIndex: Int = 0, startPositionMs: Long = 0L) {
         if (tracks.isEmpty()) {
             Log.e(TAG, "playTrackList: empty tracks")
             onErrorCallback?.invoke("No tracks to play")
@@ -241,10 +250,11 @@ class VibifyAudioPlayer private constructor(private val context: Context) {
 
         val startTrack = tracks[startIndex]
         val speed = if (startTrack.isSpokenWord) {
-            _playerState.value.playbackSpeed.takeIf { it > 0f } ?: 1f
+            preferredSpokenSpeed.takeIf { it > 0f } ?: 1f
         } else {
             1f
         }
+        val startAt = startPositionMs.coerceAtLeast(0L)
         exoPlayer.setPlaybackSpeed(speed)
         Log.d(TAG, "playTrackList: track=${startTrack.title}, uri=${startTrack.mediaUri}")
 
@@ -260,14 +270,14 @@ class VibifyAudioPlayer private constructor(private val context: Context) {
                 currentTrack = startTrack,
                 isPlaying = true,
                 isLoading = true,
-                currentPositionMs = 0L,
+                currentPositionMs = startAt,
                 durationMs = startTrack.durationMs,
                 playbackSpeed = speed
             )
         }
 
         exoPlayer.playWhenReady = true
-        exoPlayer.setMediaItems(mediaItems, startIndex, 0L)
+        exoPlayer.setMediaItems(mediaItems, startIndex, startAt)
         exoPlayer.prepare()
         exoPlayer.play()
         errorRetryMediaId = null
@@ -347,6 +357,11 @@ class VibifyAudioPlayer private constructor(private val context: Context) {
             val newQueue = listOf(track) + currentQueue
             playTrackList(newQueue, 0)
         }
+    }
+
+    fun pausePlayback() {
+        exoPlayer.pause()
+        _playerState.update { it.copy(isPlaying = false) }
     }
 
     fun togglePlayPause() {
